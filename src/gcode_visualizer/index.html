@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G-code Visualizer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .input-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        .canvas-container {
+            border: 1px solid #ccc;
+            margin: 20px auto;
+            position: relative;
+            background-color: #fff;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .button-group {
+            display: flex;
+            gap: 8px;
+        }
+        button {
+            padding: 8px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        input[type="file"] {
+            padding: 8px;
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .info-panel {
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .legend {
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .legend-color {
+            width: 30px;
+            height: 15px;
+            display: inline-block;
+            border: 1px solid #aaa;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .slider {
+            flex-grow: 1;
+        }
+        .zoom-controls {
+            display: flex;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>G-code Visualizer</h1>
+
+        <div class="input-section">
+            <h2>Load G-code File</h2>
+            <input type="file" id="fileInput" accept=".nc,.gcode,.txt">
+            <p></p>Drag and drop or click to select a G-code file (.nc, .gcode, or .txt)</p>
+        </div>
+
+        <div class="controls">
+            <div class="button-group">
+                <button id="resetViewBtn">Reset View</button>
+                <button id="fitToScreenBtn">Fit to Screen</button>
+            </div>
+
+            <div class="zoom-controls">
+                <button id="zoomInBtn">+</button>
+                <button id="zoomOutBtn">−</button>
+                <div class="slider-container">
+                    <span></span>Zoom:</span>
+                    <input type="range" min="0.1" max="5" value="1" step="0.1" class="slider" id="zoomSlider">
+                    <span id="zoomValue">100%</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="canvas-container" id="canvasContainer">
+            <canvas id="gcodeCanvas" width="1000" height="600"></canvas>
+        </div>
+
+        <div class="info-panel">
+            <h3></h3>Visualization Information</h3>
+            <div id="fileInfo">No file loaded</div>
+            <div id="statInfo"></div>
+
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: blue;"></div>
+                    <span>Rapid Moves (G0)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: green;"></div>
+                    <span>Linear Cuts (G1)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: red;"></div>
+                    <span>Arc Moves (G2/G3)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: orange;"></div>
+                    <span>Pierce Points</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gcodeCanvas');
+            const ctx = canvas.getContext('2d');
+            const fileInput = document.getElementById('fileInput');
+            const fileInfo = document.getElementById('fileInfo');
+            const statInfo = document.getElementById('statInfo');
+            const zoomSlider = document.getElementById('zoomSlider');
+            const zoomValue = document.getElementById('zoomValue');
+            const resetViewBtn = document.getElementById('resetViewBtn');
+            const fitToScreenBtn = document.getElementById('fitToScreenBtn');
+            const zoomInBtn = document.getElementById('zoomInBtn');
+            const zoomOutBtn = document.getElementById('zoomOutBtn');
+            const canvasContainer = document.getElementById('canvasContainer');
+
+            // Visualization state
+            let gcode = [];
+            let paths = [];
+            let bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+            let scale = 1;
+            let offsetX = 0;
+            let offsetY = 0;
+            let isDragging = false;
+            let startPanX = 0;
+            let startPanY = 0;
+
+            // Tool state
+            let currentX = 0;
+            let currentY = 0;
+            let currentZ = 0;
+            let isMetric = true;
+            let isTorchOn = false;
+            let rapidMoves = 0;
+            let cutMoves = 0;
+            let piercePoints = 0;
+            let totalDistance = 0;
+            let rapidDistance = 0;
+            let cutDistance = 0;
+
+            // Parse and visualize G-code
+            fileInput.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const contents = e.target.result;
+                    parseGcode(contents);
+                    visualizePaths();
+                    updateInfo(file.name);
+                };
+                reader.readAsText(file);
+            });
+
+            // Drag and drop file handling
+            canvasContainer.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                canvasContainer.classList.add('drag-over');
+            });
+
+            canvasContainer.addEventListener('dragleave', () => {
+                canvasContainer.classList.remove('drag-over');
+            });
+
+            canvasContainer.addEventListener('drop', (e) => {
+                e.preventDefault();
+                canvasContainer.classList.remove('drag-over');
+
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    fileInput.files = e.dataTransfer.files;
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const contents = e.target.result;
+                        parseGcode(contents);
+                        visualizePaths();
+                        updateInfo(file.name);
+                    };
+                    reader.readAsText(file);
+                }
+            });
+
+            // Parse G-code function
+            function parseGcode(text) {
+                // Reset stats
+                currentX = 0;
+                currentY = 0;
+                currentZ = 0;
+                isMetric = true;
+                isTorchOn = false;
+                rapidMoves = 0;
+                cutMoves = 0;
+                piercePoints = 0;
+                totalDistance = 0;
+                rapidDistance = 0;
+                cutDistance = 0;
+
+                // Reset paths
+                paths = [];
+                let currentPath = { points: [], type: 'rapid', isCutting: false };
+
+                // Reset bounds
+                bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+
+                // Parse G-code lines
+                gcode = text.split('\n');
+
+                for (const line of gcode) {
+                    const trimmedLine = line.trim();
+
+                    // Skip empty lines and comments
+                    if (!trimmedLine || trimmedLine.startsWith('(') || trimmedLine.startsWith(';')) {
+                        continue;
+                    }
+
+                    // Extract G-code command
+                    let cmdType = '';
+                    let x = null;
+                    let y = null;
+                    let z = null;
+                    let i = null;
+                    let j = null;
+
+                    // Extract G command
+                    const gMatch = trimmedLine.match(/G\d+/);
+                    if (gMatch) {
+                        cmdType = gMatch[0];
+                    }
+
+                    // Extract coordinates
+                    const xMatch = trimmedLine.match(/X([-+]?\d*\.\d+|\d+)/i);
+                    if (xMatch) x = parseFloat(xMatch[1]);
+
+                    const yMatch = trimmedLine.match(/Y([-+]?\d*\.\d+|\d+)/i);
+                    if (yMatch) y = parseFloat(yMatch[1]);
+
+                    const zMatch = trimmedLine.match(/Z([-+]?\d*\.\d+|\d+)/i);
+                    if (zMatch) z = parseFloat(zMatch[1]);
+
+                    // Extract arc parameters
+                    const iMatch = trimmedLine.match(/I([-+]?\d*\.\d+|\d+)/i);
+                    if (iMatch) i = parseFloat(iMatch[1]);
+
+                    const jMatch = trimmedLine.match(/J([-+]?\d*\.\d+|\d+)/i);
+                    if (jMatch) j = parseFloat(jMatch[1]);
+
+                    // Handle G20/G21 (units)
+                    if (cmdType === 'G20') {
+                        isMetric = false;
+                        continue;
+                    } else if (cmdType === 'G21') {
+                        isMetric = true;
+                        continue;
+                    }
+
+                    // Check for torch on/off (M3/M5)
+                    if (trimmedLine.includes('M3')) {
+                        isTorchOn = true;
+                        piercePoints++;
+                        // Add pierce point
+                        paths.push({
+                            points: [{ x: currentX, y: currentY }],
+                            type: 'pierce',
+                            isCutting: false
+                        });
+                        continue;
+                    } else if (trimmedLine.includes('M5')) {
+                        isTorchOn = false;
+                        continue;
+                    }
+
+                    // Handle H1 as torch on
+                    if (trimmedLine.includes('H1')) {
+                        isTorchOn = true;
+                        continue;
+                    }
+
+                    // Handle H0 as torch off
+                    if (trimmedLine.includes('H0')) {
+                        isTorchOn = false;
+                        continue;
+                    }
+
+                    // Update current position
+                    if (x !== null) currentX = x;
+                    if (y !== null) currentY = y;
+                    if (z !== null) currentZ = z;
+
+                    // Skip if no position change
+                    if (x === null && y === null) continue;
+
+                    // Update bounds
+                    bounds.minX = Math.min(bounds.minX, currentX);
+                    bounds.maxX = Math.max(bounds.maxX, currentX);
+                    bounds.minY = Math.min(bounds.minY, currentY);
+                    bounds.maxY = Math.max(bounds.maxY, currentY);
+
+                    // Handle different move types
+                    if (cmdType === 'G0') {
+                        // Rapid move
+                        if (currentPath.type !== 'rapid' || currentPath.isCutting !== isTorchOn) {
+                            if (currentPath.points.length > 0) {
+                                paths.push(currentPath);
+                            }
+                            currentPath = {
+                                points: [{ x: currentX, y: currentY }],
+                                type: 'rapid',
+                                isCutting: isTorchOn
+                            };
+                        } else {
+                            currentPath.points.push({ x: currentX, y: currentY });
+                        }
+                        rapidMoves++;
+
+                        // Calculate distance if more than one point
+                        if (currentPath.points.length > 1) {
+                            const prevPoint = currentPath.points[currentPath.points.length - 2];
+                            const dist = Math.sqrt(
+                                Math.pow(currentX - prevPoint.x, 2) +
+                                Math.pow(currentY - prevPoint.y, 2)
+                            );
+                            totalDistance += dist;
+                            rapidDistance += dist;
+                        }
+                    } else if (cmdType === 'G1') {
+                        // Linear cut
+                        if (currentPath.type !== 'cut' || currentPath.isCutting !== isTorchOn) {
+                            if (currentPath.points.length > 0) {
+                                paths.push(currentPath);
+                            }
+                            currentPath = {
+                                points: [{ x: currentX, y: currentY }],
+                                type: 'cut',
+                                isCutting: isTorchOn
+                            };
+                        } else {
+                            currentPath.points.push({ x: currentX, y: currentY });
+                        }
+                        cutMoves++;
+
+                        // Calculate distance if more than one point
+                        if (currentPath.points.length > 1) {
+                            const prevPoint = currentPath.points[currentPath.points.length - 2];
+                            const dist = Math.sqrt(
+                                Math.pow(currentX - prevPoint.x, 2) +
+                                Math.pow(currentY - prevPoint.y, 2)
+                            );
+                            totalDistance += dist;
+                            cutDistance += dist;
+                        }
+                    } else if (cmdType === 'G2' || cmdType === 'G3') {
+                        // Arc move - convert to line segments for simplicity
+                        if (i !== null && j !== null) {
+                            const arcPath = {
+                                points: [],
+                                type: 'arc',
+                                isCutting: isTorchOn
+                            };
+
+                            const prevX = currentPath.points.length > 0 ?
+                                currentPath.points[currentPath.points.length - 1].x : currentX;
+                            const prevY = currentPath.points.length > 0 ?
+                                currentPath.points[currentPath.points.length - 1].y : currentY;
+
+                            // Arc center
+                            const centerX = prevX + i;
+                            const centerY = prevY + j;
+
+                            // Start and end angles
+                            const startAngle = Math.atan2(prevY - centerY, prevX - centerX);
+                            const endAngle = Math.atan2(currentY - centerY, currentX - centerX);
+
+                            // Radius
+                            const radius = Math.sqrt(i * i + j * j);
+
+                            // Create arc segments
+                            const isClockwise = cmdType === 'G2';
+                            let angle = startAngle;
+                            const segments = 32;  // Number of segments to approximate arc
+
+                            arcPath.points.push({ x: prevX, y: prevY });
+
+                            for (let seg = 1; seg <= segments; seg++) {
+                                // Calculate interpolated angle
+                                let fraction = seg / segments;
+
+                                // Clockwise arcs go from start to end in negative direction
+                                let interpAngle;
+                                if (isClockwise) {
+                                    // Handle the case when end angle needs to go past 0
+                                    if (endAngle > startAngle) {
+                                        interpAngle = startAngle + (endAngle - startAngle - 2 * Math.PI) * fraction;
+                                    } else {
+                                        interpAngle = startAngle + (endAngle - startAngle) * fraction;
+                                    }
+                                } else {
+                                    // Handle the case when end angle needs to go past 0
+                                    if (endAngle < startAngle) {
+                                        interpAngle = startAngle + (endAngle - startAngle + 2 * Math.PI) * fraction;
+                                    } else {
+                                        interpAngle = startAngle + (endAngle - startAngle) * fraction;
+                                    }
+                                }
+
+                                // Calculate point on arc
+                                const arcX = centerX + radius * Math.cos(interpAngle);
+                                const arcY = centerY + radius * Math.sin(interpAngle);
+
+                                arcPath.points.push({ x: arcX, y: arcY });
+
+                                // Update bounds
+                                bounds.minX = Math.min(bounds.minX, arcX);
+                                bounds.maxX = Math.max(bounds.maxX, arcX);
+                                bounds.minY = Math.min(bounds.minY, arcY);
+                                bounds.maxY = Math.max(bounds.maxY, arcY);
+                            }
+
+                            // Add final point
+                            arcPath.points.push({ x: currentX, y: currentY });
+
+                            // Add arc path to paths
+                            if (arcPath.points.length > 0) {
+                                paths.push(arcPath);
+                            }
+
+                            // Calculate arc length approximately
+                            const arcLength = Math.abs(isClockwise ?
+                                (startAngle - endAngle) : (endAngle - startAngle)) * radius;
+                            totalDistance += arcLength;
+                            cutDistance += arcLength;
+
+                            // Start a new path
+                            currentPath = {
+                                points: [{ x: currentX, y: currentY }],
+                                type: 'cut',
+                                isCutting: isTorchOn
+                            };
+                        }
+                    }
+                }
+
+                // Add the last path
+                if (currentPath.points.length > 0) {
+                    paths.push(currentPath);
+                }
+
+                // Set default bounds if no valid data
+                if (bounds.minX === Infinity) {
+                    bounds.minX = 0;
+                    bounds.maxX = 500;
+                    bounds.minY = 0;
+                    bounds.maxY = 500;
+                }
+
+                // Add some padding to bounds
+                const padding = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.05;
+                bounds.minX -= padding;
+                bounds.maxX += padding;
+                bounds.minY -= padding;
+                bounds.maxY += padding;
+
+                // Reset view
+                resetView();
+            }
+
+            function visualizePaths() {
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Calculate scale and offset to fit the bounds
+                const width = bounds.maxX - bounds.minX;
+                const height = bounds.maxY - bounds.minY;
+                const scaleX = canvas.width / width;
+                const scaleY = canvas.height / height;
+                const finalScale = Math.min(scaleX, scaleY) * scale;
+
+                // Center the drawing
+                const scaledWidth = width * finalScale;
+                const scaledHeight = height * finalScale;
+                const centerOffsetX = (canvas.width - scaledWidth) / 2;
+                const centerOffsetY = (canvas.height - scaledHeight) / 2;
+
+                // Transform function for coordinates
+                function transformX(x) {
+                    return (x - bounds.minX) * finalScale + centerOffsetX + offsetX;
+                }
+
+                function transformY(y) {
+                    // Invert Y coordinate (canvas Y is top-down, G-code Y is bottom-up)
+                    return canvas.height - ((y - bounds.minY) * finalScale + centerOffsetY + offsetY);
+                }
+
+                // Draw grid
+                drawGrid(finalScale, centerOffsetX + offsetX, centerOffsetY + offsetY);
+
+                // Draw paths
+                for (const path of paths) {
+                    if (path.points.length < 1) continue;
+
+                    ctx.beginPath();
+                    ctx.lineJoin = 'round';
+                    ctx.lineCap = 'round';
+
+                    // Set style based on path type and torch state
+                    if (path.type === 'rapid') {
+                        ctx.strokeStyle = 'blue';
+                        ctx.lineWidth = 1;
+                        if (path.isCutting) {
+                            ctx.setLineDash([5, 5]);  // Dashed line for torch on but rapid move
+                        } else {
+                            ctx.setLineDash([]);
+                        }
+                    } else if (path.type === 'cut') {
+                        if (path.isCutting) {
+                            ctx.strokeStyle = 'green';
+                            ctx.lineWidth = 2;
+                        } else {
+                            ctx.strokeStyle = 'gray';
+                            ctx.lineWidth = 1;
+                        }
+                        ctx.setLineDash([]);
+                    } else if (path.type === 'arc') {
+                        ctx.strokeStyle = 'red';
+                        ctx.lineWidth = path.isCutting ? 2 : 1;
+                        ctx.setLineDash([]);
+                    } else if (path.type === 'pierce') {
+                        // Draw pierce point as a circle
+                        const x = transformX(path.points[0].x);
+                        const y = transformY(path.points[0].y);
+                        ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                        ctx.fillStyle = 'orange';
+                        ctx.fill();
+                        continue;
+                    }
+
+                    // Move to the first point
+                    const firstPoint = path.points[0];
+                    ctx.moveTo(transformX(firstPoint.x), transformY(firstPoint.y));
+
+                    // Draw line to all other points
+                    for (let i = 1; i < path.points.length; i++) {
+                        const point = path.points[i];
+                        ctx.lineTo(transformX(point.x), transformY(point.y));
+                    }
+
+                    ctx.stroke();
+                }
+
+                // Reset line dash
+                ctx.setLineDash([]);
+
+                // Draw axes
+                drawAxes(transformX, transformY);
+
+                // Update stats display
+                updateStats();
+            }
+
+            function drawGrid(finalScale, offsetX, offsetY) {
+                const gridSize = determineGridSize(finalScale);
+                const minX = bounds.minX;
+                const maxX = bounds.maxX;
+                const minY = bounds.minY;
+                const maxY = bounds.maxY;
+
+                ctx.strokeStyle = '#eee';
+                ctx.lineWidth = 0.5;
+
+                // Draw vertical grid lines
+                for (let x = Math.floor(minX / gridSize) * gridSize; x <= maxX; x += gridSize) {
+                    const screenX = (x - bounds.minX) * finalScale + offsetX;
+                    ctx.beginPath();
+                    ctx.moveTo(screenX, 0);
+                    ctx.lineTo(screenX, canvas.height);
+                    ctx.stroke();
+
+                    // Draw coordinate label
+                    ctx.fillStyle = '#999';
+                    ctx.font = '10px Arial';
+                    ctx.fillText(x.toFixed(1), screenX + 2, canvas.height - 5);
+                }
+
+                // Draw horizontal grid lines
+                for (let y = Math.floor(minY / gridSize) * gridSize; y <= maxY; y += gridSize) {
+                    const screenY = canvas.height - ((y - bounds.minY) * finalScale + offsetY);
+                    ctx.beginPath();
+                    ctx.moveTo(0, screenY);
+                    ctx.lineTo(canvas.width, screenY);
+                    ctx.stroke();
+
+                    // Draw coordinate label
+                    ctx.fillStyle = '#999';
+                    ctx.font = '10px Arial';
+                    ctx.fillText(y.toFixed(1), 5, screenY - 2);
+                }
+            }
+
+            function determineGridSize(scale) {
+                // Pick a nice grid size based on current scale
+                const range = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+                const screenSize = range * scale;
+                const targetGridLines = 10; // We want about 10 grid lines across
+
+                const baseGrid = range / targetGridLines;
+
+                // Round to nice number
+                let gridSize;
+                const power = Math.floor(Math.log10(baseGrid));
+                const factor = baseGrid / Math.pow(10, power);
+
+                if (factor < 1.5) gridSize = Math.pow(10, power);
+                else if (factor < 3.5) gridSize = 2 * Math.pow(10, power);
+                else if (factor < 7.5) gridSize = 5 * Math.pow(10, power);
+                else gridSize = 10 * Math.pow(10, power);
+
+                return gridSize;
+            }
+
+            function drawAxes(transformX, transformY) {
+                // Draw axes
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 1;
+
+                // X-axis
+                const originY = transformY(0);
+                if (originY >= 0 && originY <= canvas.height) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, originY);
+                    ctx.lineTo(canvas.width, originY);
+                    ctx.stroke();
+
+                    // Draw x-axis label
+                    ctx.fillStyle = '#666';
+                    ctx.font = '12px Arial';
+                    ctx.fillText('X axis', canvas.width - 40, originY - 5);
+                }
+
+                // Y-axis
+                const originX = transformX(0);
+                if (originX >= 0 && originX <= canvas.width) {
+                    ctx.beginPath();
+                    ctx.moveTo(originX, 0);
+                    ctx.lineTo(originX, canvas.height);
+                    ctx.stroke();
+
+                    // Draw y-axis label
+                    ctx.fillStyle = '#666';
+                    ctx.font = '12px Arial';
+                    ctx.fillText('Y axis', originX + 5, 15);
+                }
+
+                // Draw origin
+                if (originX >= 0 && originX <= canvas.width && originY >= 0 && originY <= canvas.height) {
+                    ctx.fillStyle = 'red';
+                    ctx.beginPath();
+                    ctx.arc(originX, originY, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+
+                    ctx.fillStyle = '#666';
+                    ctx.font = '12px Arial';
+                    ctx.fillText('(0,0)', originX + 6, originY - 6);
+                }
+            }
+
+            function updateInfo(filename) {
+                fileInfo.innerHTML = `
+                    <p><strong>File:</strong> ${filename}</p>
+                    <p><strong>G-code Lines:</strong> ${gcode.length}</p>
+                    <p><strong>Dimensions:</strong> ${(bounds.maxX - bounds.minX).toFixed(2)} x ${(bounds.maxY - bounds.minY).toFixed(2)} ${isMetric ? 'mm' : 'inches'}</p>
+                `;
+
+                updateStats();
+            }
+
+            function updateStats() {
+                statInfo.innerHTML = `
+                    <p><strong>Rapid Moves:</strong> ${rapidMoves}</p>
+                    <p><strong>Cut Moves:</strong> ${cutMoves}</p>
+                    <p><strong>Pierce Points:</strong> ${piercePoints}</p>
+                    <p><strong>Total Distance:</strong> ${totalDistance.toFixed(2)} ${isMetric ? 'mm' : 'inches'}</p>
+                    <p><strong>Rapid Distance:</strong> ${rapidDistance.toFixed(2)} ${isMetric ? 'mm' : 'inches'} (${(rapidDistance / totalDistance * 100).toFixed(1)}%)</p>
+                    <p><strong>Cut Distance:</strong> ${cutDistance.toFixed(2)} ${isMetric ? 'mm' : 'inches'} (${(cutDistance / totalDistance * 100).toFixed(1)}%)</p>
+                `;
+            }
+
+            // Pan and zoom functions
+            canvas.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startPanX = e.clientX;
+                startPanY = e.clientY;
+                canvas.style.cursor = 'grabbing';
+            });
+
+            canvas.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+
+                const deltaX = e.clientX - startPanX;
+                const deltaY = e.clientY - startPanY;
+
+                offsetX += deltaX;
+                offsetY += deltaY;
+
+                startPanX = e.clientX;
+                startPanY = e.clientY;
+
+                visualizePaths();
+            });
+
+            canvas.addEventListener('mouseup', () => {
+                isDragging = false;
+                canvas.style.cursor = 'grab';
+            });
+
+            canvas.addEventListener('mouseleave', () => {
+                isDragging = false;
+                canvas.style.cursor = 'grab';
+            });
+
+            // Zoom with mouse wheel
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+
+                const zoomDirection = e.deltaY < 0 ? 1 : -1;
+                const zoomFactor = 0.1;
+                const newScale = scale * (1 + zoomDirection * zoomFactor);
+
+                // Limit zoom level
+                if (newScale >= 0.1 && newScale <= 10) {
+                    scale = newScale;
+                    zoomSlider.value = scale;
+                    zoomValue.textContent = `${Math.round(scale * 100)}%`;
+                    visualizePaths();
+                }
+            });
+
+            // Zoom slider
+            zoomSlider.addEventListener('input', () => {
+                scale = parseFloat(zoomSlider.value);
+                zoomValue.textContent = `${Math.round(scale * 100)}%`;
+                visualizePaths();
+            });
+
+            // Zoom buttons
+            zoomInBtn.addEventListener('click', () => {
+                scale = Math.min(10, scale + 0.1);
+                zoomSlider.value = scale;
+                zoomValue.textContent = `${Math.round(scale * 100)}%`;
+                visualizePaths();
+            });
+
+            zoomOutBtn.addEventListener('click', () => {
+                scale = Math.max(0.1, scale - 0.1);
+                zoomSlider.value = scale;
+                zoomValue.textContent = `${Math.round(scale * 100)}%`;
+                visualizePaths();
+            });
+
+            // Reset view button
+            resetViewBtn.addEventListener('click', () => {
+                resetView();
+                visualizePaths();
+            });
+
+            // Fit to screen button
+            fitToScreenBtn.addEventListener('click', () => {
+                resetView();
+                visualizePaths();
+            });
+
+            function resetView() {
+                scale = 1;
+                offsetX = 0;
+                offsetY = 0;
+                zoomSlider.value = scale;
+                zoomValue.textContent = `${Math.round(scale * 100)}%`;
+            }
+
+            // Initially clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#888';
+            ctx.textAlign = 'center';
+            ctx.fillText('Drag and drop a G-code file or use the file input above to load a file.', canvas.width / 2, canvas.height / 2);
+        });
+    </script>
+</body>
+</html>

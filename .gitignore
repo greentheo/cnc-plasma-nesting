@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Generated nesting outputs (regenerable by running the scripts)
+*_output.nc
+*_output_panel*.nc
+*_output_manual.nc
+*greedy_output*.nc
+*hybrid_output*.nc
+nested_output*.nc
+simplified_output*.nc
+test_*_output*.nc
+
+# Generated plots / result images
+*_result*.png
+*_progress*.png
+*_layout*.png
+*_output.png
+hybrid_gen_*.png
+debug_parsed_shapes.png
+standalone_de_*.png
+test_*.png
+
+# Run/progress artifact dirs
+hybrid_progress/
+de_demo_output/
